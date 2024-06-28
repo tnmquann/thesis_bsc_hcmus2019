@@ -4,8 +4,6 @@
 TIME_REPORT_MOTUS="/benchmarking/PRJNA747117/4_motus2"
 TIME_LOG_MOTUS="/benchmarking/PRJNA747117/4_motus2/time_motus2_mergedsamples.txt"
 TRIMMED_FASTQ="/benchmarking/PRJNA747117/1_fastq_trimmed/merged_seq"
-# FORWARD_SEQ="/benchmarking/PRJNA747117/1_fastq_trimmed/*_1.fastq.gz"
-# REVERSE_SEQ="/benchmarking/PRJNA747117/1_fastq_trimmed/*_2.fastq.gz"
 
 # Create output directory if it doesn't exist
 mkdir -p "$TIME_REPORT_MOTUS"
