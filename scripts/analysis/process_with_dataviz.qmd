@@ -1,0 +1,970 @@
+---
+title: "Benchmarking (BSc Thesis)"
+author: "tnmquann"
+execute:
+  echo: true
+  freeze: true
+  eval: false
+format: 
+  html:
+    page-layout: full
+    code-fold: false
+    code-tools: true
+    code-block-bg: true
+    code-block-border-left: "#31BAE9"
+    grid:
+      sidebar-width: 350px
+      margin-width: 250px
+      gutter-width: 1.5em
+      body-width: 800px
+    toc: true
+    self-contained: true
+---
+
+# Part 0: Prepare packages
+
+## Check, install and load packages
+
+**For packages in `cran` server**
+
+```{r}
+check_install_load <- function(packages) {
+  for (package in packages) {
+    if (!require(package, character.only = TRUE)) {
+      install.packages(package, dependencies = TRUE)
+      library(package, character.only = TRUE)
+    }
+  }
+}
+```
+
+```{r}
+#| echo: false
+#| output: false
+check_install_load(c("data.table", "dplyr", "ggplot2", 
+                     "ggthemes", "gridExtra", "lubridate", 
+                     "magrittr", "readr", "scales", 
+                     "stringr", "tidyr", "readr", 
+                     "RColorBrewer", "cowplot", "see", "compositions", "vegan", "purrr",
+                     "ggpubr", "colorspace", "viridis", "extrafont", "PupillometryR", "pals"))
+```
+
+## Helper function
+**Split violin plots**
+```{r}
+#' geom_split_violin_HELPER
+#'
+#' @format NULL
+#' @usage NULL
+#' @name gsv_helper
+#' @keywords internal
+
+GeomSplitViolin <- ggplot2::ggproto("GeomSplitViolin", ggplot2::GeomViolin, draw_group = function(self, data, ..., draw_quantiles = NULL){
+  data <- transform(data, xminv = x - violinwidth * (x - xmin), xmaxv = x + violinwidth * (xmax - x))
+  grp <- data[1,'group']
+  newdata <- plyr::arrange(transform(data, x = if(grp%%2==1) xminv else xmaxv), if(grp%%2==1) y else -y)
+  newdata <- rbind(newdata[1, ], newdata, newdata[nrow(newdata), ], newdata[1, ])
+  newdata[c(1,nrow(newdata)-1,nrow(newdata)), 'x'] <- round(newdata[1, 'x'])
+  if (length(draw_quantiles) > 0 & !scales::zero_range(range(data$y))) {
+    stopifnot(all(draw_quantiles >= 0), all(draw_quantiles <=
+                                              1))
+    quantiles <- ggplot2:::create_quantile_segment_frame(data, draw_quantiles)
+    aesthetics <- data[rep(1, nrow(quantiles)), setdiff(names(data), c("x", "y")), drop = FALSE]
+    aesthetics$alpha <- rep(1, nrow(quantiles))
+    both <- cbind(quantiles, aesthetics)
+    quantile_grob <- ggplot2::GeomPath$draw_panel(both, ...)
+    ggplot2:::ggname("geom_split_violin", grid::grobTree(ggplot2::GeomPolygon$draw_panel(newdata, ...), quantile_grob))
+  }
+  else {
+    ggplot2:::ggname("geom_split_violin", ggplot2::GeomPolygon$draw_panel(newdata, ...))
+  }
+})
+
+#' Split violin geom
+#'
+#' Create split violin plot with ggplot2 with geom_split_violin. Shamelessly copy-pasted from \href{https://stackoverflow.com/questions/35717353/split-violin-plot-with-ggplot/}{jan-glx at Stack Overflow}.
+#'
+#' @param stat A value
+#' @param draw_quantiles A value
+#' @param trim A value
+#' @param scale A value
+#' @param na.rm A value
+#'
+#' @examples
+#'
+#'set.seed(123)
+#'
+#' my_data = tibble::tibble(
+#'  x=c(rep('a', 200), rep('b', 200)),
+#'  y=c(rnorm(100), rnorm(100, 0.5), rnorm(100, 1), rnorm(100, 1.5)),
+#'  cond=c(rep('i', 100), rep('j', 200), rep('i', 100))
+#' )
+#'
+#' ggplot2::ggplot(my_data, ggplot2::aes(x, y, fill=cond)) +
+#' geom_split_violin()
+#'
+#'
+#' @inheritParams ggplot2::stat_identity
+#' @export
+#'
+geom_split_violin <- function (mapping = NULL, data = NULL, stat = "ydensity", position = "identity", ..., draw_quantiles = NULL, trim = TRUE, scale = "area", na.rm = FALSE, show.legend = NA, inherit.aes = TRUE) {
+  ggplot2::layer(data = data, mapping = mapping, stat = stat, geom = GeomSplitViolin, position = position, show.legend = show.legend, inherit.aes = inherit.aes, params = list(trim = trim, scale = scale, draw_quantiles = draw_quantiles, na.rm = na.rm, ...))
+}
+```
+
+# Part 1: Calculate alpha & beta diversity
+
+## Data pre-processing
+
+### Set datetime format and fonts in R
+
+```{r}
+loadfonts(device = "win")
+Sys.setlocale(locale = "en_US.UTF-8")
+```
+
+### Import data
+
+```{r}
+# List amplicon IDs
+amplicon_rm <- c("SRR17380123","SRR17380130","SRR17380131","SRR17380132","SRR17380133","SRR17380134","SRR17380135","SRR17380136","SRR17380137","SRR17380138","SRR17380139","SRR17380140","SRR17380141","SRR17380142","SRR17380143","SRR17380144","SRR17380145","SRR17380146","SRR17380147","SRR17380148","SRR17380149","SRR17380150","SRR17380151","SRR17380152","SRR17380153","SRR17380154","SRR17380155","SRR17380156","SRR17380157","SRR17380158","SRR17380159","SRR17380160","SRR17380161","SRR17380162","SRR17380163","SRR17380164","SRR17380165","SRR17380166","SRR17380167","SRR17380168","SRR17380169","SRR17380170","SRR17380171","SRR17380172","SRR17380173","SRR17380174","SRR17380175","SRR17380176","SRR17380177","SRR17380178","SRR17380179","SRR17380180","SRR17380181","SRR17380182","SRR17380183","SRR17380184","SRR17380185","SRR17380186","SRR17380187","SRR17380188","SRR17380189","SRR17380190","SRR17380191","SRR17380192","SRR17380193","SRR17380194","SRR17380195","SRR17380196","SRR17380197","SRR17380198","SRR17380199","SRR17380200","SRR17380201","SRR17380202","SRR17380203","SRR17380204","SRR17380205","SRR17380206","SRR17380217","SRR17380228","SRR17380239","SRR17380250","SRR17380251","SRR17380252")
+
+# Abundance data - sample_id
+benchmark_df <- fread("wgs_benchmarking.csv")
+
+# Remove records "unclassified", "uncultured" and "unidentified" in genus
+benchmark_df <- benchmark_df %>% filter(!genus %in% c("unclassified", "uncultured", "unidentified"))
+
+# Remove records with sample_id in amplicon_rm
+benchmark_df <- benchmark_df %>% filter(!sample_id %in% amplicon_rm)
+
+# Recalculate relative_abundance value for each record
+benchmark_df <- benchmark_df %>% group_by(tag) %>% mutate(relative_abundance = relative_abundance / sum(relative_abundance))
+
+#write.csv(benchmark_df, "benchmark_df.csv", row.names = FALSE)
+```
+
+## Create Aitchison, $L_1$, $L_2$ and Bray - Curtis distance matrix for full data table (beta diversity)
+
+### Species
+
+```{r}
+library(compositions)
+library(vegan)
+
+# Summarize data by summing relative abundance for each combination of tags and bacteria_final
+summarize_data <- function(df) {
+  df %>%
+    group_by(tag, bacteria_finalname) %>%
+    summarise(relative_abundance = sum(relative_abundance), .groups = 'drop')
+}
+
+# Create pivot_wider and calculate specified distance
+calculate_distance <- function(df, method) {
+  df_summarized <- summarize_data(df)
+  df_wide <- df_summarized %>%
+    pivot_wider(names_from = bacteria_finalname, values_from = relative_abundance, values_fill = list(relative_abundance = 0)) %>%
+    as.data.frame()
+  rownames(df_wide) <- df_wide$tag
+  df_wide <- df_wide[, -1]
+  
+  # Calculate distance using specified method
+  dist_matrix <- if (method == "aitchison") {
+    vegdist(df_wide, method = "aitchison", pseudo = 1)
+  } else if (method == "bray") {
+    vegdist(df_wide, method = "bray")
+  } else {
+    dist(df_wide, method = method)
+  }
+  dist_matrix <- as.matrix(dist_matrix)
+  return(dist_matrix)
+}
+
+# Save the distance matrices to CSV files
+save_distances_to_csv <- function(dist_matrix, filename) {
+  write.csv(dist_matrix, file = filename, row.names = TRUE)
+}
+
+# Filter column
+filter_columns <- function(dist_matrix, keep_columns) {
+  filtered_matrix <- dist_matrix[, colnames(dist_matrix) %in% keep_columns, drop = FALSE]
+  return(filtered_matrix)
+}
+
+# Main function to process data step-by-step for multiple distance metrics
+process_data <- function(df, filter = FALSE) {
+  keep_columns <- c("reference|Cell mock|reference", "reference|DNA mock|reference", "reference|Mixed samples|reference")
+
+  # Calculate and save Aitchison distance
+  aitchison_distance_matrix <- calculate_distance(df, "aitchison")
+  if (filter) {
+    aitchison_distance_matrix <- filter_columns(aitchison_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(aitchison_distance_matrix, "aitchison_distance_species.csv")
+  
+  # Calculate and save Manhattan distance
+  manhattan_distance_matrix <- calculate_distance(df, "manhattan")
+  if (filter) {
+    manhattan_distance_matrix <- filter_columns(manhattan_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(manhattan_distance_matrix, "manhattan_distance_species.csv")
+  
+  # Calculate and save Euclidean distance
+  euclidean_distance_matrix <- calculate_distance(df, "euclidean")
+  if (filter) {
+    euclidean_distance_matrix <- filter_columns(euclidean_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(euclidean_distance_matrix, "euclidean_distance_species.csv")
+  
+  # Calculate and save Bray-Curtis distance
+  bray_curtis_distance_matrix <- calculate_distance(df, "bray")
+  if (filter) {
+    bray_curtis_distance_matrix <- filter_columns(bray_curtis_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(bray_curtis_distance_matrix, "bray_curtis_distance_species.csv")
+  
+  # Return all distance matrices
+  list(
+    aitchison = aitchison_distance_matrix,
+    manhattan = manhattan_distance_matrix,
+    euclidean = euclidean_distance_matrix,
+    bray_curtis = bray_curtis_distance_matrix
+  )
+}
+
+# Process the entire dataset without filtering columns
+#distance_matrices_unfiltered <- process_data(benchmark_df, filter = FALSE)
+
+# Process the entire dataset with filtering columns
+distance_matrices <- process_data(benchmark_df, filter = TRUE)
+
+# Access individual distance matrices
+aitchison_distance_matrix <- distance_matrices$aitchison
+manhattan_distance_matrix <- distance_matrices$manhattan
+euclidean_distance_matrix <- distance_matrices$euclidean
+bray_curtis_distance_matrix <- distance_matrices$bray_curtis
+```
+
+### Genus
+
+```{r}
+library(compositions)
+library(vegan)
+
+# Summarize data by summing relative abundance for each combination of tags and bacteria_final
+summarize_data <- function(df) {
+  df %>%
+    group_by(tag, genus) %>%
+    summarise(relative_abundance = sum(relative_abundance), .groups = 'drop')
+}
+
+# Create pivot_wider and calculate specified distance
+calculate_distance <- function(df, method) {
+  df_summarized <- summarize_data(df)
+  df_wide <- df_summarized %>%
+    pivot_wider(names_from = genus, values_from = relative_abundance, values_fill = list(relative_abundance = 0)) %>%
+    as.data.frame()
+  rownames(df_wide) <- df_wide$tag
+  df_wide <- df_wide[, -1]
+  
+  # Calculate distance using specified method
+  dist_matrix <- if (method == "aitchison") {
+    vegdist(df_wide, method = "aitchison", pseudo = 1)
+  } else if (method == "bray") {
+    vegdist(df_wide, method = "bray")
+  } else {
+    dist(df_wide, method = method)
+  }
+  dist_matrix <- as.matrix(dist_matrix)
+  return(dist_matrix)
+}
+
+# Save the distance matrices to CSV files
+save_distances_to_csv <- function(dist_matrix, filename) {
+  write.csv(dist_matrix, file = filename, row.names = TRUE)
+}
+
+# Filter column
+filter_columns <- function(dist_matrix, keep_columns) {
+  # Keep only the specified columns
+  filtered_matrix <- dist_matrix[, colnames(dist_matrix) %in% keep_columns, drop = FALSE]
+  return(filtered_matrix)
+}
+
+# Main function to process data step-by-step for multiple distance metrics
+process_data <- function(df, filter = FALSE) {
+  keep_columns <- c("reference|Cell mock|reference", "reference|DNA mock|reference", "reference|Mixed samples|reference")
+
+  # Calculate and save Aitchison distance
+  aitchison_distance_matrix <- calculate_distance(df, "aitchison")
+  if (filter) {
+    aitchison_distance_matrix <- filter_columns(aitchison_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(aitchison_distance_matrix, "aitchison_distance_genus.csv")
+  
+  # Calculate and save Manhattan distance
+  manhattan_distance_matrix <- calculate_distance(df, "manhattan")
+  if (filter) {
+    manhattan_distance_matrix <- filter_columns(manhattan_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(manhattan_distance_matrix, "manhattan_distance_genus.csv")
+  
+  # Calculate and save Euclidean distance
+  euclidean_distance_matrix <- calculate_distance(df, "euclidean")
+  if (filter) {
+    euclidean_distance_matrix <- filter_columns(euclidean_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(euclidean_distance_matrix, "euclidean_distance_genus.csv")
+  
+  # Calculate and save Bray-Curtis distance
+  bray_curtis_distance_matrix <- calculate_distance(df, "bray")
+  if (filter) {
+    bray_curtis_distance_matrix <- filter_columns(bray_curtis_distance_matrix, keep_columns)
+  }
+  save_distances_to_csv(bray_curtis_distance_matrix, "bray_curtis_distance_genus.csv")
+  
+  # Return all distance matrices
+  list(
+    aitchison = aitchison_distance_matrix,
+    manhattan = manhattan_distance_matrix,
+    euclidean = euclidean_distance_matrix,
+    bray_curtis = bray_curtis_distance_matrix
+  )
+}
+
+# Process the entire dataset and save the output matrices to variables
+distance_matrices <- process_data(benchmark_df, filter = TRUE)
+
+# Access individual distance matrices
+aitchison_distance_matrix <- distance_matrices$aitchison
+manhattan_distance_matrix <- distance_matrices$manhattan
+euclidean_distance_matrix <- distance_matrices$euclidean
+bray_curtis_distance_matrix <- distance_matrices$bray_curtis
+
+```
+
+## Calculate alpha diversity
+
+### Process for overall
+```{r}
+# Create table for calculating alpha-diversity by using vegan packages.
+benchmarking_abundance_species_overall %>% group_by(tools) %>%  summarise(Sprichness = specnumber(relative_abundance),
+            Shannon = diversity(relative_abundance, index = "shannon"),
+            Simpson = diversity(relative_abundance, index = "simpson"),
+            InvSimpson = 1/Simpson,
+            Abundance = sum(relative_abundance),
+            Berger_Parker_dominance = max(relative_abundance),
+            Dominance = bacteria_finalname[which.max(relative_abundance)]) -> df_alphadiv_species_overall
+write.table(df_alphadiv_species_overall, "df_alphadiv_species_overall.csv", sep = ",", row.names = FALSE)
+
+benchmarking_abundance_genus_overall %>% group_by(tools) %>%  summarise(Sprichness = specnumber(relative_abundance),
+            Shannon = diversity(relative_abundance, index = "shannon"),
+            Simpson = diversity(relative_abundance, index = "simpson"),
+            InvSimpson = 1/Simpson,
+            Abundance = sum(relative_abundance),
+            Berger_Parker_dominance = max(relative_abundance),
+            Dominance = genus[which.max(relative_abundance)]) -> df_alphadiv_genus_overall
+write.table(df_alphadiv_genus_overall, "df_alphadiv_genus_overall.csv", sep = ",", row.names = FALSE)
+```
+
+### Process for each sample
+```{r}
+# Define the function to calculate diversity indices and save to CSV
+calculate_and_save_diversity <- function(data, filename, taxonomic_rank) {
+  # Group and summarize data
+  summarized_df <- data %>%
+    group_by(sample_id, tools, data_type) %>%
+    summarise(Sprichness = specnumber(relative_abundance),
+              Shannon = diversity(relative_abundance, index = "shannon"),
+              Simpson = diversity(relative_abundance, index = "simpson"),
+              InvSimpson = 1 / Simpson,
+              Abundance = sum(relative_abundance),
+              Berger_Parker_dominance = max(relative_abundance),
+              Dominance = get(taxonomic_rank)[which.max(relative_abundance)])
+  write.table(summarized_df, filename, sep = ",", row.names = FALSE)
+}
+
+# Apply the function to your datasets
+calculate_and_save_diversity(benchmark_df, "df_alphadiv_genus_benchmarking_separated_rm_unclassified.csv", "genus")
+calculate_and_save_diversity(benchmark_df, "df_alphadiv_species_benchmarking_separated_rm_unclassified.csv", "bacteria_finalname")
+```
+
+### Process for sample_id (Template)
+```{r}
+# Create table for calculating alpha-diversity by using vegan packages.
+benchmarking_abundance_species %>% group_by(sample_id, tools) %>%  summarise(Sprichness = specnumber(relative_abundance),
+            Shannon = diversity(relative_abundance, index = "shannon"),
+            Simpson = diversity(relative_abundance, index = "simpson"),
+            InvSimpson = 1/Simpson,
+            Abundance = sum(relative_abundance),
+            Berger_Parker_dominance = max(relative_abundance),
+            Dominance = bacteria_finalname[which.max(relative_abundance)]) -> df_alphadiv_species
+write.table(df_alphadiv_species, "df_alphadiv_species.csv", sep = ",", row.names = FALSE)
+
+benchmarking_abundance_genus %>% group_by(sample_id, tools) %>%  summarise(Sprichness = specnumber(relative_abundance),
+            Shannon = diversity(relative_abundance, index = "shannon"),
+            Simpson = diversity(relative_abundance, index = "simpson"),
+            InvSimpson = 1/Simpson,
+            Abundance = sum(relative_abundance),
+            Berger_Parker_dominance = max(relative_abundance),
+            Dominance = genus[which.max(relative_abundance)]) -> df_alphadiv_genus
+write.table(df_alphadiv_genus, "df_alphadiv_genus.csv", sep = ",", row.names = FALSE)
+
+reference_abund %>% group_by(sample_id, tools) %>%  summarise(Sprichness = specnumber(relative_abundance),
+            Shannon = diversity(relative_abundance, index = "shannon"),
+            Simpson = diversity(relative_abundance, index = "simpson"),
+            InvSimpson = 1/Simpson,
+            Abundance = sum(relative_abundance),
+            Berger_Parker_dominance = max(relative_abundance),
+            Dominance = genus[which.max(relative_abundance)]) -> df_alphadiv_reference_abund
+write.table(df_alphadiv_reference_abund, "df_alphadiv_reference_abund.csv", sep = ",", row.names = FALSE)
+```
+
+
+## Create descriptive statistics
+```{r}
+# Function to calculate summary statistics
+calc_summary_stats <- function(data, measurevar) {
+  summary_stats <- data %>%
+    summarise(
+      mean = mean(.data[[measurevar]], na.rm = TRUE),
+      sd = sd(.data[[measurevar]], na.rm = TRUE),
+      variance = var(.data[[measurevar]], na.rm = TRUE),
+      skewness = skewness(.data[[measurevar]], na.rm = TRUE),
+      kurtosis = kurtosis(.data[[measurevar]], na.rm = TRUE),
+      min = min(.data[[measurevar]], na.rm = TRUE),
+      max = max(.data[[measurevar]], na.rm = TRUE),
+      median = median(.data[[measurevar]], na.rm = TRUE),
+      n = sum(!is.na(.data[[measurevar]])),
+      se = sd / sqrt(n),
+      lower_ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+      upper_ci = mean + qt(1 - (0.05 / 2), n - 1) * se
+    )
+  
+  # Calculate mode (custom function)
+  mode_value <- function(v) {
+    uniqv <- unique(v)
+    uniqv[which.max(tabulate(match(v, uniqv)))]
+  }
+  summary_stats <- summary_stats %>%
+    mutate(mode = mode_value(data[[measurevar]]))
+  
+  return(summary_stats)
+}
+
+# Function to calculate grouped statistics
+calculate_grouped_stats <- function(df, measurevar) {
+  df %>%
+    group_by(tools_exp, data_type, notes) %>%
+    do(calc_summary_stats(., measurevar)) %>%
+    ungroup() %>%
+    mutate(metric = measurevar)
+}
+
+
+# Generate statistics for each metric
+df_species_stats <- calculate_grouped_stats(rmse_species, "rmse")
+df_genus_stats <- calculate_grouped_stats(rmse_genus, "rmse")
+
+
+# Combine results
+all_stats <- bind_rows(df_species_stats, df_genus_stats)
+
+write.table(all_stats, file = "summary_statistics.csv", sep = ",", row.names = FALSE, quote = FALSE)
+```
+
+## Calculate root mean square error
+```{r}
+library(dplyr)
+# For species
+# Assuming the data is loaded into species_ref and species_exp data frames
+
+# Join species_ref and species_exp on bacteria_finalname and data_type
+merged_species <- species_exp_overall %>%
+  left_join(species_ref_overall, by = c("bacteria_finalname", "data_type"), suffix = c("_exp", "_ref"))
+
+# Replace NA in relative_abundance_ref with 0 (false positives)
+merged_species <- merged_species %>%
+  mutate(relative_abundance_ref = ifelse(is.na(relative_abundance_ref), 0, relative_abundance_ref))
+
+# Function to calculate RMSE
+calculate_rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+# Calculate RMSE for each group
+rmse_species <- merged_species %>%
+  group_by(data_type, tools_exp) %>%
+  summarize(
+    rmse = calculate_rmse(relative_abundance_ref, relative_abundance_exp),
+    .groups = 'drop'
+  )
+
+# Add column notes and fill with "species"
+rmse_species <- rmse_species %>% mutate(notes = "species")
+write.csv(rmse_species, file = "rmse_results_species_overall.csv", row.names = FALSE)
+
+
+# For genus
+# Join species_ref and species_exp on bacteria_finalname and data_type
+merged_genus <- genus_exp_overall %>%
+  left_join(genus_ref_overall, by = c("genus", "data_type"), suffix = c("_exp", "_ref"))
+
+# Replace NA in relative_abundance_ref with 0 (false positives)
+merged_genus <- merged_genus %>%
+  mutate(relative_abundance_ref = ifelse(is.na(relative_abundance_ref), 0, relative_abundance_ref))
+
+# Calculate RMSE for each group
+rmse_genus <- merged_genus %>%
+  group_by(data_type, tools_exp) %>%
+  summarize(
+    rmse = calculate_rmse(relative_abundance_ref, relative_abundance_exp),
+    .groups = 'drop'
+  )
+# Add column notes and fill with "genus"
+rmse_genus <- rmse_genus %>% mutate(notes = "genus")
+write.csv(rmse_genus, file = "rmse_results_genus_overall.csv", row.names = FALSE)
+```
+
+# Part 2: Data visualization
+
+## Create alpha diversity plot (for clinical samples)
+```{r}
+ggplot(species_123s_MB, aes(x = tools, y = log(Shannon), color = mother_neonatal)) +
+  #geom_split_violin(alpha = .4, trim = FALSE, width = 1.5) +
+  geom_boxplot(linewidth = 0.7) +
+  #geom_point(data = species_123s_MB, aes(color = mother_neonatal), size = .9, alpha = 0.2, position = position_dodge(width = .75)) +
+  scale_color_manual(values = c("Mother"="#1d76b2","Neonatal"="#ff8112")) +
+  labs(x=element_blank(), y="Shannon Index (log)", color=element_blank()) +
+  theme_classic() +
+  #scale_y_log10() +
+  scale_y_continuous(limits = c(-8, 2), breaks = seq(-8, 2, by = 2)) +
+  theme(legend.position = "top",
+        panel.grid.major.y = element_line(color='#7f7f7f', size=0.5),
+        #axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+        legend.margin=margin(0,0,0,0),
+        text = element_text(size = 16)
+        #legend.box.margin=margin(0,0,-10,-10),
+        ) -> p_shannon
+ggplot(species_123s_MB, aes(x = tools, y = log(Simpson), color = mother_neonatal)) +
+  #geom_split_violin(alpha = .4, trim = FALSE, width = 1.5) +
+  geom_boxplot(linewidth = 0.7) +
+  #geom_point(data = species_123s_MB, aes(color = mother_neonatal), size = .9, alpha = 0.2, position = position_dodge(width = .75)) +
+  scale_color_manual(values = c("Mother"="#1d76b2","Neonatal"="#ff8112")) +
+  labs(x=element_blank(), y="Simpson Index (log)", color=element_blank()) +
+  theme_classic() +
+  scale_y_continuous(limits = c(-8, 2), breaks = seq(-8, 2, by = 2)) +
+  #scale_y_log10() +
+  theme(legend.position = "top",
+        panel.grid.major.y = element_line(color='#7f7f7f', size=0.5),
+        #axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+        legend.margin=margin(0,0,0,0),
+        text = element_text(size = 16)
+        #legend.box.margin=margin(0,0,-10,-10),
+        ) -> p_simpson
+p_div_MB <- ggarrange(p_shannon, p_simpson, ncol = 2, nrow = 1, common.legend = TRUE, legend = "top")
+p_div_MB
+ggsave("p_div_MB_species.svg", p_div_MB, width = 9, height = 5)
+```
+
+## Create stacked bar plot (for clinical samples)
+
+### Automatic task
+
+```{r}
+library(pals)
+library(ggthemes)
+library(scales)
+
+genus_123s <- read.csv("species_123s.csv")
+
+# Define a function to generate color palette
+generate_color_palette <- function(df, column) {
+  unique_values <- unique(df[[column]])
+  # Exclude "unclassified" from the color generation
+  non_unclassified_values <- unique_values[unique_values != "unclassified"]
+  num_colors <- length(non_unclassified_values)
+  
+  # Generate a palette with sufficient distinct colors
+  color_palette <- stepped(num_colors)
+  
+  # Create a named vector of colors
+  color_map <- setNames(color_palette, non_unclassified_values)
+  
+  # Assign gray to "unclassified" if present
+  if ("unclassified" %in% unique_values) {
+    color_map["unclassified"] <- "gray"
+  }
+  
+  return(color_map)
+}
+
+# Define a function to create and save the stacked bar plot
+create_and_save_plot <- function(df, tool_name) {
+  # Filter the data for the given tool
+  df_filtered <- df %>%
+    filter(tools == tool_name)
+  
+  # Generate the color palette
+  color_palette <- generate_color_palette(df_filtered, "bacteria_final")
+  
+  # Create the stacked bar plot
+  plot_stacked_bar <- function(df, color_palette) {
+    ggplot(df, aes(x = mother_neonatal, y = scaled_abundance, fill = bacteria_final)) +
+      geom_bar(stat = "identity", width = 0.63) +
+      scale_fill_manual(values = color_palette) +
+      labs(title = paste("Abundance by Mother/Neonatal -", tool_name),
+           x = "Mother/Neonatal",
+           y = "Prevalance (%)",
+           fill = "Genus") +
+      theme_few() +
+      scale_y_continuous(labels = percent, expand = c(0, 0))
+  }
+  
+  stacked_bar_plot <- plot_stacked_bar(df_filtered, color_palette)
+  
+  # Save the plot to SVG file
+  file_name <- paste0("stacked_bar_plot_", tool_name, ".svg")
+  ggsave(file_name, stacked_bar_plot, width = 10, height = 6)
+  
+  # Display the plot
+  print(stacked_bar_plot)
+}
+
+# Iterate over each distinct tool value and create the plot
+unique_tools <- unique(species_123s$tools)
+for (tool in unique_tools) {
+  create_and_save_plot(species_123s, tool)
+}
+
+```
+
+### Generate file for MB and tools
+
+```{r}
+library(pals)
+library(ggthemes)
+library(scales)
+
+# Define a function to generate color palette
+generate_color_palette <- function(df, column) {
+  unique_values <- unique(df[[column]])
+  # Exclude "unclassified", "uncultured", and "unidentified" from the color generation
+  special_cases <- c("unclassified", "uncultured", "unidentified")
+  non_special_values <- unique_values[!unique_values %in% special_cases]
+  num_colors <- length(non_special_values)
+  
+  # Generate a palette with sufficient distinct colors
+  color_palette <- polychrome(num_colors)
+  
+  # Create a named vector of colors
+  color_map <- setNames(color_palette, non_special_values)
+  
+  # Assign gray to "unclassified", "uncultured", and "unidentified" if present
+  for (value in special_cases) {
+    if (value %in% unique_values) {
+      color_map[value] <- "gray"
+    }
+  }
+  
+  return(color_map)
+}
+
+# Define a function to create and save the stacked bar plot
+create_and_save_plot <- function(df, subjid_value) {
+  # Filter the data for the given tool and subjid
+  df_filtered <- df %>%
+    filter(data_type == subjid_value)
+  
+  # Generate the color palette
+  color_palette <- generate_color_palette(df_filtered, "genus")
+  
+  # Create the stacked bar plot
+  plot_stacked_bar <- function(df, color_palette) {
+    ggplot(df, aes(x = tools, y = scaled_abundance, fill = genus)) +
+      geom_bar(stat = "identity", width = 0.63) +
+      scale_fill_manual(values = color_palette) +
+      labs(title = paste("Abundance -", subjid_value),
+           x = "Tools",
+           y = "Relative abundance (%)",
+           fill = "Genus") +
+      theme_few() +
+      scale_y_continuous(labels = percent, expand = c(0, 0)) +
+      theme(axis.text.x = element_text(angle = 45, hjust=1))
+  }
+  
+  # Draw the stacked bar plot
+  stacked_bar_plot <- plot_stacked_bar(df_filtered, color_palette)
+  
+  # Save the plot to SVG file
+  dir.create("subjid_viz", showWarnings = FALSE)
+  file_name <- paste0("subjid_viz/stacked_bar_plot_", subjid_value, ".svg")
+  ggsave(file_name, stacked_bar_plot, width = 12, height = 6)
+}
+
+# Iterate over each distinct tool and subjid value and create the plot
+unique_subjids <- unique(genus_123s_rm_loadtest_cleaned$data_type)
+
+for (data_type in unique_subjids) {
+  create_and_save_plot(genus_123s_rm_loadtest_cleaned, data_type)
+}
+```
+
+
+## Plots for benchmarking results
+
+### Import data
+
+```{r}
+# Dataframe for system processing
+system_normal <- fread("system_normal.csv")
+system_normal <- system_normal %>%
+  mutate(group = ifelse(grepl("kraken2_", packages), "kraken2", "Other tools"))
+system_loadtest <- fread("system_loadtest.csv")
+system_loadtest <- system_loadtest %>%
+  mutate(group = ifelse(grepl("kraken2_", packages), "kraken2", "Other tools"))
+
+# Dataframe for classification metrics
+classification_results <- fread("classification_results.csv")
+classification_results <- classification_results %>%
+  mutate(group = ifelse(grepl("kraken2_", tools), "kraken2", "Other tools"))
+classification_results_mixedsamples <- fread("classification_results_mixedsamples.csv")
+classification_results_mixedsamples <- classification_results_mixedsamples %>%
+  mutate(group = ifelse(grepl("kraken2_", tools), "kraken2", "Other tools"))
+
+# Dataframe for abundance
+df_abundance <- fread("total_abundance.csv")
+df_abundance <- df_abundance %>%
+  mutate(group = ifelse(grepl("kraken2_", tools), "kraken2", "Other tools"))
+df_diversity <- fread("diversity.csv")
+df_diversity <- df_diversity %>%
+  mutate(group = ifelse(grepl("kraken2_", tools), "kraken2", "Other tools"))
+df_distance <- fread("distance.csv")
+df_distance <- df_distance %>%
+  mutate(group = ifelse(grepl("kraken2_", tools), "kraken2", "Other tools"))
+```
+
+### Remove AMPLICON sample_id for all dataframe above
+```{r}
+amplicon_rm <- c("SRR17380123","SRR17380130","SRR17380131","SRR17380132","SRR17380133","SRR17380134","SRR17380135","SRR17380136","SRR17380137","SRR17380138","SRR17380139","SRR17380140","SRR17380141","SRR17380142","SRR17380143","SRR17380144","SRR17380145","SRR17380146","SRR17380147","SRR17380148","SRR17380149","SRR17380150","SRR17380151","SRR17380152","SRR17380153","SRR17380154","SRR17380155","SRR17380156","SRR17380157","SRR17380158","SRR17380159","SRR17380160","SRR17380161","SRR17380162","SRR17380163","SRR17380164","SRR17380165","SRR17380166","SRR17380167","SRR17380168","SRR17380169","SRR17380170","SRR17380171","SRR17380172","SRR17380173","SRR17380174","SRR17380175","SRR17380176","SRR17380177","SRR17380178","SRR17380179","SRR17380180","SRR17380181","SRR17380182","SRR17380183","SRR17380184","SRR17380185","SRR17380186","SRR17380187","SRR17380188","SRR17380189","SRR17380190","SRR17380191","SRR17380192","SRR17380193","SRR17380194","SRR17380195","SRR17380196","SRR17380197","SRR17380198","SRR17380199","SRR17380200","SRR17380201","SRR17380202","SRR17380203","SRR17380204","SRR17380205","SRR17380206","SRR17380217","SRR17380228","SRR17380239","SRR17380250","SRR17380251","SRR17380252")
+
+classification_results <- classification_results[!sample_id %in% amplicon_rm]
+classification_results_mixedsamples <- classification_results_mixedsamples[!sample_id %in% amplicon_rm]
+df_abundance <- df_abundance[!sample_id %in% amplicon_rm]
+df_diversity <- df_diversity[!sample_id %in% amplicon_rm]
+df_distance <- df_distance[!sample_id %in% amplicon_rm]
+# Filter for mixed samples
+df_abundance_mixed <- df_abundance %>% filter(sample_id == "tourlousse2022")
+```
+
+### $L_2$ distance
+```{r}
+df_distance_mixed <- df_distance %>% filter(sample_id == "tourlousse2022")
+ggplot(df_distance, aes(x = tools, y = L2_Distance, color = factor(notes))) +
+  #geom_split_violin(alpha = .4, trim = FALSE, width = 1.5) +
+  geom_boxplot(outlier.shape = NA) +
+  #geom_point(data = data_kraken2_MB, aes(color = mother_neonatal), size = 1.5, alpha = 0.45) +
+  geom_point(data = df_distance, aes(color = factor(notes)), size = .7, alpha = 0.2, position = position_dodge(width = .75)) +
+  scale_color_manual(values = c("species"="#9567be","genus"="#54af54")) +
+  geom_point(data = df_distance_mixed, aes(group = notes, color = "black"), size = 1.5, alpha = 0.7, position = position_dodge(width = .75)) +
+  labs(x=element_blank(), y="L2 Distance") +
+  theme_bw() +
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,-10),
+        title = element_blank()) +
+  facet_grid(.~ group, scales = "free", space = "free") -> p_l2_dist
+p_l2_dist
+```
+
+### $L_1$ distance
+```{r}
+# df_distance_mixed <- df_distance %>% filter(sample_id == "tourlousse2022")
+ggplot(df_distance, aes(x = tools, y = L1_Distance, color = factor(notes))) +
+  #geom_split_violin(alpha = .4, trim = FALSE, width = 1.5) +
+  geom_boxplot(outlier.shape = NA) +
+  #geom_point(data = data_kraken2_MB, aes(color = mother_neonatal), size = 1.5, alpha = 0.45) +
+  geom_point(data = df_distance, aes(color = factor(notes)), size = .7, alpha = 0.2, position = position_dodge(width = .75)) +
+  scale_color_manual(values = c("species"="#9567be","genus"="#54af54")) +
+  geom_point(data = df_distance_mixed, aes(group = notes, color = "black"), size = 1, alpha = 0.75, position = position_dodge(width = .75)) +
+  labs(x=element_blank(), y="L1 Distance") +
+  theme_bw() +
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,-10),
+        title = element_blank()) +
+  facet_grid(.~ group, scales = "free", space = "free") -> p_l1_dist
+p_l1_dist
+```
+
+### Prepare data for classification metrics
+```{r}
+classification_results_genus <- classification_results %>% filter(notes == "genus")
+# Assuming df_distance is your original dataframe
+# Reshape the dataframe to a long format
+df_long_genus <- classification_results_genus %>%
+  pivot_longer(cols = c(Precision, Recall, F1, F0.5), 
+               names_to = "Scoring_Types", 
+               values_to = "Scoring_Value")
+
+classification_results_species <- classification_results %>% filter(notes == "species")
+df_long_species <- classification_results_species %>%
+  pivot_longer(cols = c(Precision, Recall, F1, F0.5), 
+               names_to = "Scoring_Types", 
+               values_to = "Scoring_Value")
+```
+
+```{r}
+classification_results_genus_mixedsamples <- classification_results_mixedsamples %>% filter(notes == "genus")
+# Assuming df_distance is your original dataframe
+# Reshape the dataframe to a long format
+df_long_genus_mixedsamples <- classification_results_genus_mixedsamples %>%
+  pivot_longer(cols = c(Precision, Recall, F1, F0.5), 
+               names_to = "Scoring_Types", 
+               values_to = "Scoring_Value")
+
+classification_results_species_mixedsamples <- classification_results_mixedsamples %>% filter(notes == "species")
+df_long_species_mixedsamples <- classification_results_species_mixedsamples %>%
+  pivot_longer(cols = c(Precision, Recall, F1, F0.5), 
+               names_to = "Scoring_Types", 
+               values_to = "Scoring_Value")
+```
+### Customize color palette
+```{r}
+# Define color palette
+tourlousse_color <- c("#4e79a7", "#a0cbe8", "#f28e2b", "#ffbe7d", "#59a14f", "#8cd17d", "#b6992d","#f1ce63", "#499894", "#86bcb6", "#e15759", "#ff9d9a", "#79706e", "#bab0ac", "#d37295", "#fabfd2", "#b07aa1", "#d4a6c8", "#9d7660")
+
+my_color <- c("#4e79a7", "#a0cbe8", "#f28e2b", "#ffbe7d", "#59a14f", "#8cd17d", "#b6992d","#f1ce63", "#499894", "#86bcb6", "#e15759", "#ff9d9a", "#deb100", "#bab0ac", "#fabfd2", "#000000", "#b07aa1", "#d4a6c8", "#9d7660")
+```
+
+### Average Precision vs. Average Recall
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Filter to keep only Precision and Recall rows
+df_filtered <- df_long_genus %>%
+  filter(Scoring_Types %in% c("Precision", "Recall"))
+
+# Calculate mean and standard deviation for Precision and Recall for each tool
+summary_df <- df_filtered %>%
+  group_by(tools, Scoring_Types) %>%
+  summarise(
+    Mean = mean(Scoring_Value, na.rm = TRUE),
+    SD = sd(Scoring_Value, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_wider(names_from = Scoring_Types, values_from = c(Mean, SD)) %>%
+  rename(
+    Precision = Mean_Precision,
+    Recall = Mean_Recall,
+    Precision_Error = SD_Precision,
+    Recall_Error = SD_Recall
+  )
+
+# Plot
+gg <- ggplot(summary_df, aes(x = Precision, y = Recall, fill = tools, color = tools)) +
+  geom_errorbar(aes(ymin = Recall - Recall_Error, ymax = Recall + Recall_Error), width = 0.007) +  # Vertical error bars
+  geom_errorbarh(aes(xmin = Precision - Precision_Error, xmax = Precision + Precision_Error), height = 0.007) +  # Horizontal error bars
+  geom_segment(aes(x = 0.6, y = 0.6, xend = 1.1, yend = 1.05), linetype = "dashed", color = "black") +  # Dashed line
+  geom_point(shape = 21, size = 4, color="black") +  # Points with tool colors
+  scale_x_continuous(limits = c(0.6, 1.05)) +
+  scale_y_continuous(limits = c(0.6, 1.05)) +
+  scale_fill_manual(values = my_color) +  # Custom color palette for fill
+  scale_color_manual(values = my_color) +  # Custom color palette for error bars
+  theme_bw() +
+  labs(x = "Precision", y = "Recall", title = "Average Precision vs. Average Recall \nGenus Level", color = element_blank(), fill = element_blank()) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  guides(fill=guide_legend(ncol=2))
+gg
+ggsave("avg_pre_rec_genus.svg", gg, width = 9, height = 6)
+write.csv(summary_df, "avg_pre_rec_genus.csv")
+```
+
+### F1 and F0.5 score
+```{r}
+# Filter to keep only Precision and Recall rows
+df_filtered <- df_long_species %>%
+  filter(Scoring_Types %in% c("F1"))
+
+# Calculate mean and standard deviation for Precision and Recall for each tool
+summary_df <- df_filtered %>%
+  group_by(tools, Scoring_Types, group) %>%
+  summarise(
+    Mean = mean(Scoring_Value, na.rm = TRUE),
+    SD = sd(Scoring_Value, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_wider(names_from = Scoring_Types, values_from = c(Mean, SD)) %>%
+  rename(
+    F1 = Mean_F1,
+    F1_Error = SD_F1
+  )
+
+# Plot
+gg <- ggplot(summary_df, aes(x = tools, y = F1, fill = tools, color = tools)) +
+  geom_errorbar(aes(ymin = F1 - F1_Error, ymax = F1 + F1_Error), width = 0.3) +  # Vertical error bars
+  geom_point(shape = 21, size = 4, color="black") +  # Points with tool colors
+  scale_y_continuous(limits = c(0.6, 1)) +
+  scale_fill_manual(values = my_color) +  # Custom color palette for fill
+  scale_color_manual(values = my_color) +  # Custom color palette for error bars
+  theme_bw() +
+  labs(x = element_blank(), y = "F1", title = "Average F1 score \nSpecies Level", color = element_blank(), fill = element_blank()) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1)) +
+  guides(fill=guide_legend(ncol=2)) +
+  facet_grid(.~ group, scales = "free", space = "free")
+gg
+ggsave("avg_f1_species.svg", gg, width = 10, height = 6)
+write.csv(summary_df, "avg_f1_species.csv")
+```
+
+### Load test
+```{r}
+# Base ggplot object with data and aesthetics
+p_score_genus_mixedsamples <- ggplot(df_long_genus_mixedsamples, aes(x = tools, y = Scoring_Value, fill = Scoring_Types)) +
+
+  # Add a point layer with color mapped to Distance_Type, slightly dodged to avoid overlap
+  geom_bar(position="dodge", stat="identity", alpha =9) +
+  
+  # Customize colors for the different Distance_Type categories
+  #scale_fill_manual(values = c("Precision" = "#f0bebc", "Recall" = "#d2eceb", "F1" = "#e7638c")) +
+  scale_fill_manual(values = c("Precision" = "#ff7d0b", 
+                                "Recall" = "#f1dddc", 
+                                "F1" = "#4085bb")) +
+  
+  # Label adjustments: no x-axis label, y-axis labeled "Distance Value"
+  labs(x = element_blank(), y = "Scoring") +
+  guides(fill = guide_legend(title = element_blank())) +
+  theme_bw() +
+  
+  # Customize theme: remove legend, adjust x-axis text angle and alignment
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(0,0,-10,-10)
+        ) +
+  facet_grid(.~ group, scales = "free", space = "free")
+
+p_score_genus_mixedsamples
+
+```
+
+
+## Export to pdf
+```{r}
+save_plots_to_svg <- function(plot_list, width = 9, height = 6) {
+  for (plot_name in names(plot_list)) {
+    ggsave(filename = paste0("plots/",plot_name, ".svg"), 
+           plot = plot_list[[plot_name]], 
+           width = width, 
+           height = height)
+  }
+}
+plot_list <- list(p_l2_dist = p_l2_dist, p_l1_dist = p_l1_dist, p_bray_dist = p_bray_dist, p_aitchison_dist = p_aitchison_dist, p_diversity_genus_overall = p_diversity_genus_overall, p_diversity_species_overall = p_diversity_species_overall)
+save_plots_to_svg(plot_list)
+```
