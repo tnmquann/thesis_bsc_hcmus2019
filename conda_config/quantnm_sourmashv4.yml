@@ -136,7 +136,6 @@ dependencies:
   - sourmash=4.8.8
   - sourmash-minimal=4.8.8
   - sourmash_plugin_branchwater=0.9.3
-  - sylph=0.6.1
   - sysroot_linux-64=2.28
   - taxonkit=0.16.0
   - threadpoolctl=3.5.0
