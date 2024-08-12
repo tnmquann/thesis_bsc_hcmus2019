@@ -1,9 +1,9 @@
 # Repository for my BSc Thesis
 
-This repository contains the configuration files and scripts used in my thesis: *"In-depth analysis of various shotgun metagenomics bioinformatics methods and gut microbiome characterization in mother and neonatal sepsis patients."*
+This repository contains the configuration files and scripts used in my thesis: *"In-depth analysis of various shotgun metagenomics bioinformatics methods and gut microbiome characterization in mother and neonatal sepsis patients."*. **[Presentation slide](https://github.com/tnmquann/thesis_bsc_hcmus2019/blob/main/%5BBScThesis%5D19180142%20-%20quantnm.pdf)**
 
 > TL;DR: Among the tools evaluated, `yacht` provided the best results.
-
+**
 ## Description
 
 The tools I evaluated include:
